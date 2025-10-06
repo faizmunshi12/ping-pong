@@ -2,7 +2,7 @@ import pygame
 import random
 
 class Ball:
-    def __init__(self, x, y, width, height, screen_width, screen_height, sounds=None):
+    def __init__(self, x, y, width, height, screen_width, screen_height):
         self.original_x = x
         self.original_y = y
         self.x = x
@@ -13,118 +13,92 @@ class Ball:
         self.screen_height = screen_height
         self.velocity_x = random.choice([-5, 5])
         self.velocity_y = random.choice([-3, 3])
-        self.max_speed_x = 9
-        self.max_speed_y = 7
+        self.prev_x = x
+        self.prev_y = y
+        self.game_engine = None  # Will be set by GameEngine to allow sound access
 
-        # Sounds dict: {"paddle": Sound, "wall": Sound}
-        self.sounds = sounds or {}
-
-    def rect(self):
-        return pygame.Rect(int(self.x), int(self.y), self.width, self.height)
-
-    def _play(self, key):
-        snd = self.sounds.get(key)
-        if snd:
-            snd.play()
+    def set_game_engine(self, game_engine):
+        """Allow ball to access game engine for playing sounds"""
+        self.game_engine = game_engine
 
     def move(self):
-        # Sub-step movement to reduce tunneling on top/bottom walls
-        remaining_x = self.velocity_x
-        remaining_y = self.velocity_y
-        steps = int(max(1, max(abs(remaining_x), abs(remaining_y))))
-        step_x = remaining_x / steps
-        step_y = remaining_y / steps
+        self.prev_x = self.x
+        self.prev_y = self.y
+        
+        self.x += self.velocity_x
+        self.y += self.velocity_y
 
-        for _ in range(steps):
-            self.x += step_x
-            self.y += step_y
-
-            # Vertical bounds bounce with snap and invert
-            if self.y <= 0:
-                self.y = 0
-                # Only play sound if the sign flips
-                if self.velocity_y >= 0:
-                    self._play("wall")
-                self.velocity_y = -abs(self.velocity_y)
-                step_y = -abs(step_y)
-            elif self.y + self.height >= self.screen_height:
-                self.y = self.screen_height - self.height
-                if self.velocity_y <= 0:
-                    self._play("wall")
-                self.velocity_y = abs(self.velocity_y) * -1
-                step_y = -abs(step_y)
-
-    def _apply_bounce_angle(self, paddle_rect, is_left):
-        # Compute relative impact location to shape angle
-        paddle_center = paddle_rect.centery
-        ball_center = self.rect().centery
-        offset = (ball_center - paddle_center) / (paddle_rect.height / 2)
-        offset = max(-1, min(1, offset))
-
-        # Increase base horizontal speed slightly on each hit, clamp to max
-        new_speed_x = min(self.max_speed_x, abs(self.velocity_x) + 0.3)
-        # Play paddle sound if direction changes across collision
-        old_sign = 1 if self.velocity_x > 0 else -1
-        self.velocity_x = (new_speed_x if not is_left else -new_speed_x)
-        new_sign = 1 if self.velocity_x > 0 else -1
-        if new_sign != old_sign:
-            self._play("paddle")
-
-        # Adjust vertical velocity based on impact offset, clamp
-        self.velocity_y = max(-self.max_speed_y, min(self.max_speed_y, self.velocity_y + offset * 3))
-
-    def _swept_collide_with_paddle(self, paddle_rect, is_left):
-        # Simple overlap check then resolve by snapping to paddle edge and reflecting
-        if not self.rect().colliderect(paddle_rect):
-            return False
-
-        if is_left:
-            # Snap just to the right of left paddle
-            self.x = paddle_rect.right
-        else:
-            # Snap just to the left of right paddle
-            self.x = paddle_rect.left - self.width
-
-        # Apply bounce and slight positional nudge to avoid immediate re-collision
-        self._apply_bounce_angle(paddle_rect, is_left)
-        self.x += (1 if not is_left else -1)
-        return True
+        if self.y <= 0 or self.y + self.height >= self.screen_height:
+            self.velocity_y *= -1
 
     def check_collision(self, player, ai):
-        # Perform micro-stepped sweep along current velocity to avoid tunneling through paddles
-        steps = int(max(1, max(abs(self.velocity_x), abs(self.velocity_y))))
-        step_x = self.velocity_x / steps
-        step_y = self.velocity_y / steps
+        ball_rect = self.rect()
+        
+        # Store previous velocity to detect changes
+        prev_velocity_x = self.velocity_x
+        
+        # Check collision with player paddle
+        if self.velocity_x < 0:
+            if self.continuous_collision_detection(player, ball_rect):
+                self.handle_paddle_collision(player)
+        
+        # Check collision with AI paddle  
+        elif self.velocity_x > 0:
+            if self.continuous_collision_detection(ai, ball_rect):
+                self.handle_paddle_collision(ai)
 
-        collided = False
-        for _ in range(steps):
-            # advance
-            self.x += step_x
-            self.y += step_y
+        # Play paddle hit sound if velocity changed due to collision
+        if self.velocity_x != prev_velocity_x and self.game_engine:
+            self.game_engine.paddle_hit_sound.play()
 
-            # Check paddle collisions at each micro-step
-            if self._swept_collide_with_paddle(player.rect(), True):
-                collided = True
-                break
-            if self._swept_collide_with_paddle(ai.rect(), False):
-                collided = True
-                break
+    def continuous_collision_detection(self, paddle, ball_rect):
+        paddle_rect = paddle.rect()
+        
+        if ball_rect.colliderect(paddle_rect):
+            return True
+        
+        if self.velocity_x != 0 or self.velocity_y != 0:
+            move_rect = pygame.Rect(
+                min(self.prev_x, self.x),
+                min(self.prev_y, self.y),
+                abs(self.velocity_x) + self.width,
+                abs(self.velocity_y) + self.height
+            )
+            
+            if move_rect.colliderect(paddle_rect):
+                return True
+        
+        return False
 
-            # Top/bottom handled here as well to respect the sweep path
-            if self.y <= 0:
-                self.y = 0
-                self._play("wall")
-                self.velocity_y = -abs(self.velocity_y)
-            elif self.y + self.height >= self.screen_height:
-                self.y = self.screen_height - self.height
-                self._play("wall")
-                self.velocity_y = abs(self.velocity_y) * -1
-
-        return collided
+    def handle_paddle_collision(self, paddle):
+        paddle_rect = paddle.rect()
+        ball_rect = self.rect()
+        
+        relative_intersect_y = (paddle_rect.centery - ball_rect.centery) / (paddle_rect.height / 2)
+        
+        self.velocity_x *= -1
+        self.velocity_y = -relative_intersect_y * 5
+        
+        min_speed = 3
+        if abs(self.velocity_y) < min_speed:
+            self.velocity_y = min_speed if self.velocity_y > 0 else -min_speed
+        
+        speed_increase = 1.05
+        self.velocity_x *= speed_increase
+        self.velocity_y *= speed_increase
+        
+        if self.velocity_x > 0:
+            self.x = paddle_rect.right + 1
+        else:
+            self.x = paddle_rect.left - self.width - 1
 
     def reset(self):
         self.x = self.original_x
         self.y = self.original_y
-        # Launch back toward last scorer’s side by flipping x, randomize y
-        self.velocity_x = -self.velocity_x if self.velocity_x != 0 else random.choice([-5, 5])
+        self.velocity_x = random.choice([-5, 5])
         self.velocity_y = random.choice([-3, 3])
+        self.prev_x = self.x
+        self.prev_y = self.y
+
+    def rect(self):
+        return pygame.Rect(self.x, self.y, self.width, self.height)
