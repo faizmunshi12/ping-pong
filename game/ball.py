@@ -2,7 +2,7 @@ import pygame
 import random
 
 class Ball:
-    def __init__(self, x, y, width, height, screen_width, screen_height):
+    def __init__(self, x, y, width, height, screen_width, screen_height, sounds=None):
         self.original_x = x
         self.original_y = y
         self.x = x
@@ -16,8 +16,16 @@ class Ball:
         self.max_speed_x = 9
         self.max_speed_y = 7
 
+        # Sounds dict: {"paddle": Sound, "wall": Sound}
+        self.sounds = sounds or {}
+
     def rect(self):
         return pygame.Rect(int(self.x), int(self.y), self.width, self.height)
+
+    def _play(self, key):
+        snd = self.sounds.get(key)
+        if snd:
+            snd.play()
 
     def move(self):
         # Sub-step movement to reduce tunneling on top/bottom walls
@@ -34,10 +42,15 @@ class Ball:
             # Vertical bounds bounce with snap and invert
             if self.y <= 0:
                 self.y = 0
+                # Only play sound if the sign flips
+                if self.velocity_y >= 0:
+                    self._play("wall")
                 self.velocity_y = -abs(self.velocity_y)
                 step_y = -abs(step_y)
             elif self.y + self.height >= self.screen_height:
                 self.y = self.screen_height - self.height
+                if self.velocity_y <= 0:
+                    self._play("wall")
                 self.velocity_y = abs(self.velocity_y) * -1
                 step_y = -abs(step_y)
 
@@ -50,7 +63,12 @@ class Ball:
 
         # Increase base horizontal speed slightly on each hit, clamp to max
         new_speed_x = min(self.max_speed_x, abs(self.velocity_x) + 0.3)
+        # Play paddle sound if direction changes across collision
+        old_sign = 1 if self.velocity_x > 0 else -1
         self.velocity_x = (new_speed_x if not is_left else -new_speed_x)
+        new_sign = 1 if self.velocity_x > 0 else -1
+        if new_sign != old_sign:
+            self._play("paddle")
 
         # Adjust vertical velocity based on impact offset, clamp
         self.velocity_y = max(-self.max_speed_y, min(self.max_speed_y, self.velocity_y + offset * 3))
@@ -95,9 +113,11 @@ class Ball:
             # Top/bottom handled here as well to respect the sweep path
             if self.y <= 0:
                 self.y = 0
+                self._play("wall")
                 self.velocity_y = -abs(self.velocity_y)
             elif self.y + self.height >= self.screen_height:
                 self.y = self.screen_height - self.height
+                self._play("wall")
                 self.velocity_y = abs(self.velocity_y) * -1
 
         return collided

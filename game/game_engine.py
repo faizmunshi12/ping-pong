@@ -6,6 +6,10 @@ WHITE = (255, 255, 255)
 
 class GameEngine:
     def __init__(self, width, height):
+        # Initialize audio mixer early
+        if not pygame.mixer.get_init():
+            pygame.mixer.init()
+
         self.width = width
         self.height = height
 
@@ -15,7 +19,22 @@ class GameEngine:
         self.player = Paddle(10, height // 2 - 50, self.paddle_width, self.paddle_height)
         self.ai = Paddle(width - 20, height // 2 - 50, self.paddle_width, self.paddle_height)
 
-        self.ball = Ball(width // 2, height // 2, 7, 7, width, height)
+        # Load sounds
+        try:
+            self.snd_paddle = pygame.mixer.Sound("assets/paddle.wav")
+            self.snd_wall = pygame.mixer.Sound("assets/wall.wav")
+            self.snd_score = pygame.mixer.Sound("assets/score.wav")
+        except Exception:
+            # Fallback: create silent sounds if assets missing to avoid crashes
+            self.snd_paddle = None
+            self.snd_wall = None
+            self.snd_score = None
+
+        # Ball with sound effects
+        self.ball = Ball(
+            width // 2, height // 2, 7, 7, width, height,
+            sounds={"paddle": self.snd_paddle, "wall": self.snd_wall}
+        )
 
         self.player_score = 0
         self.ai_score = 0
@@ -24,19 +43,15 @@ class GameEngine:
         self.big_font = pygame.font.SysFont("Arial", 64)
         self.small_font = pygame.font.SysFont("Arial", 22)
 
-        # Game state
+        # Game state for replay flow (from Task 3)
         self.game_over = False
         self.winner_text = ""
-        # default match target is Best of 5 (first to 5)
         self.target_score = 5
-
-        # Game over UI flow
-        self.show_winner_until = None  # time to stop showing winner and show replay menu
-        self.winner_hold_ms = 1200     # hold winner banner before menu
+        self.show_winner_until = None
+        self.winner_hold_ms = 1200
         self.showing_menu = False
 
     def handle_input(self):
-        # Consume quit and key events; when in menu, process selection
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
@@ -62,22 +77,18 @@ class GameEngine:
             self.player.move(10, self.height)
 
     def _start_new_match(self, best_of: int):
-        # Best-of N means first to (N+1)//2
         self.target_score = (best_of + 1) // 2
-        # Reset scores and positions
         self.player_score = 0
         self.ai_score = 0
         self.player.y = self.height // 2 - self.paddle_height // 2
         self.ai.y = self.height // 2 - self.paddle_height // 2
         self.ball.reset()
-        # Clear game over/menu state
         self.game_over = False
         self.winner_text = ""
         self.showing_menu = False
         self.show_winner_until = None
 
     def _maybe_enter_menu(self):
-        # Transition from winner banner to replay menu after hold
         if self.game_over and not self.showing_menu and self.show_winner_until is not None:
             if pygame.time.get_ticks() >= self.show_winner_until:
                 self.showing_menu = True
@@ -97,42 +108,40 @@ class GameEngine:
             self.show_winner_until = pygame.time.get_ticks() + self.winner_hold_ms
 
     def update(self):
-        # If game over or in menu, gameplay is paused; still manage transitions
         if self.game_over or self.showing_menu:
             self._maybe_enter_menu()
             return
 
-        # Regular gameplay
         self.ball.move()
         self.ball.check_collision(self.player, self.ai)
 
         # Scoring and reset if ball exits screen horizontally
         if self.ball.x <= 0:
             self.ai_score += 1
+            if self.snd_score:
+                self.snd_score.play()
             self.ball.reset()
         elif self.ball.x + self.ball.width >= self.width:
             self.player_score += 1
+            if self.snd_score:
+                self.snd_score.play()
             self.ball.reset()
 
         # Simple AI
         self.ai.auto_track(self.ball, self.height)
 
-        # Check game over condition
         self._check_game_over()
 
     def render(self, screen):
         screen.fill((0, 0, 0))
 
-        # Center dashed line
         for y in range(0, self.height, 20):
             pygame.draw.rect(screen, WHITE, pygame.Rect(self.width // 2 - 1, y, 2, 10))
 
-        # Draw paddles and ball
         pygame.draw.rect(screen, WHITE, self.player.rect())
         pygame.draw.rect(screen, WHITE, self.ai.rect())
         pygame.draw.rect(screen, WHITE, self.ball.rect())
 
-        # Scores and target indicator
         player_text = self.font.render(str(self.player_score), True, WHITE)
         ai_text = self.font.render(str(self.ai_score), True, WHITE)
         target_text = self.small_font.render(f"First to {self.target_score}", True, WHITE)
@@ -140,13 +149,11 @@ class GameEngine:
         screen.blit(ai_text, (3 * self.width // 4 - ai_text.get_width() // 2, 20))
         screen.blit(target_text, (self.width // 2 - target_text.get_width() // 2, 20))
 
-        # Winner banner
         if self.game_over and not self.showing_menu:
             banner = self.big_font.render(self._winner_text_safe(), True, WHITE)
             banner_rect = banner.get_rect(center=(self.width // 2, self.height // 2))
             screen.blit(banner, banner_rect)
 
-        # Replay menu
         if self.showing_menu:
             header = self.font.render("Play Again?", True, WHITE)
             opt1 = self.font.render("Best of 3  - press 3", True, WHITE)
